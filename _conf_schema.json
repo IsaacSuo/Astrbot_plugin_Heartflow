@@ -46,5 +46,23 @@
     "type": "list",
     "default": [],
     "hint": "允许心流回复的群聊sid列表，/sid获取"
+  },
+  "enable_message_aggregation": {
+    "description": "启用消息聚合机制",
+    "type": "bool",
+    "default": false,
+    "hint": "启用后，机器人会智能等待用户的连续消息，避免在不完整表达时过早回复"
+  },
+  "aggregation_max_wait_time": {
+    "description": "消息聚合最大等待时间(秒)",
+    "type": "float",
+    "default": 12.0,
+    "hint": "等待用户后续消息的最长时间，超时后会处理已收集的消息"
+  },
+  "aggregation_confidence_threshold": {
+    "description": "完整性判断信心阈值",
+    "type": "float",
+    "default": 0.7,
+    "hint": "小模型判断消息不完整的信心阈值，值越高越严格"
   }
 }

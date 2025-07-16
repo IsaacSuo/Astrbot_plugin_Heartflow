@@ -8,6 +8,9 @@ import astrbot.api.star as star
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api import logger
 
+# 导入消息聚合模块
+from .message_aggregation import DirectProcessor, AggregationProcessor
+
 
 @dataclass
 class JudgeResult:
@@ -66,7 +69,35 @@ class HeartflowPlugin(star.Star):
             "timing": 0.2
         }
 
+        # 初始化消息处理器
+        self._init_message_processor()
+
         logger.info("心流插件已初始化")
+
+    def _init_message_processor(self):
+        """初始化消息处理器"""
+        # 根据配置选择消息处理器
+        if self.config.get("enable_message_aggregation", False):
+            # 创建聚合处理器
+            self.message_processor = AggregationProcessor(
+                config=self.config,
+                judge_provider_getter=self._get_judge_provider
+            )
+            logger.info("✅ 消息聚合处理器已启用")
+        else:
+            # 创建直接处理器
+            self.message_processor = DirectProcessor()
+            logger.info("✅ 直接消息处理器已启用")
+
+    def _get_judge_provider(self):
+        """获取判断提供商的辅助方法"""
+        try:
+            if not self.judge_provider_name:
+                return None
+            return self.context.get_provider_by_id(self.judge_provider_name)
+        except Exception as e:
+            logger.debug(f"获取判断提供商失败: {e}")
+            return None
 
     async def judge_with_tiny_model(self, event: AstrMessageEvent) -> JudgeResult:
         """使用小模型进行智能判断"""
@@ -222,32 +253,45 @@ class HeartflowPlugin(star.Star):
             return
 
         try:
-            # 小参数模型判断是否需要回复
-            judge_result = await self.judge_with_tiny_model(event)
-
-            if judge_result.should_reply:
-                logger.info(f"🔥 心流触发主动回复 | {event.unified_msg_origin[:20]}... | 评分:{judge_result.overall_score:.2f}")
-
-                # 生成主动回复
-                try:
-                    result_count = 0
-                    async for result in self._generate_active_reply(event, judge_result):
-                        result_count += 1
-                        logger.debug(f"心流回复生成器产生结果 #{result_count}: {type(result)}")
-                        yield result
-
-                except Exception as e:
-                    logger.error(f"执行心流回复生成器异常: {e}")
-                    self._update_passive_state(event, judge_result)
-            else:
-                # 记录被动状态
-                logger.debug(f"心流判断不通过 | {event.unified_msg_origin[:20]}... | 评分:{judge_result.overall_score:.2f} | 原因: {judge_result.reasoning[:30]}...")
-                self._update_passive_state(event, judge_result)
+            # 通过消息处理器处理消息
+            processed_event = await self.message_processor.process_message(event)
+            
+            # 如果处理器返回None，说明正在等待聚合或消息被过滤
+            if processed_event is None:
+                return
+            
+            # 进行心流判断（与原有逻辑完全一致）
+            judge_result = await self.judge_with_tiny_model(processed_event)
+            
+            # 处理判断结果
+            async for result in self._handle_judge_result(processed_event, judge_result):
+                yield result
 
         except Exception as e:
             logger.error(f"心流插件处理消息异常: {e}")
             import traceback
             logger.error(traceback.format_exc())
+
+    async def _handle_judge_result(self, event: AstrMessageEvent, judge_result: JudgeResult):
+        """处理心流判断结果"""
+        if judge_result.should_reply:
+            logger.info(f"🔥 心流触发主动回复 | {event.unified_msg_origin[:20]}... | 评分:{judge_result.overall_score:.2f}")
+
+            # 生成主动回复
+            try:
+                result_count = 0
+                async for result in self._generate_active_reply(event, judge_result):
+                    result_count += 1
+                    logger.debug(f"心流回复生成器产生结果 #{result_count}: {type(result)}")
+                    yield result
+
+            except Exception as e:
+                logger.error(f"执行心流回复生成器异常: {e}")
+                self._update_passive_state(event, judge_result)
+        else:
+            # 记录被动状态
+            logger.debug(f"心流判断不通过 | {event.unified_msg_origin[:20]}... | 评分:{judge_result.overall_score:.2f} | 原因: {judge_result.reasoning[:30]}...")
+            self._update_passive_state(event, judge_result)
 
     async def _generate_active_reply(self, event: AstrMessageEvent, judge_result: JudgeResult):
         """生成主动回复"""
@@ -459,6 +503,23 @@ class HeartflowPlugin(star.Star):
         chat_id = event.unified_msg_origin
         chat_state = self._get_chat_state(chat_id)
 
+        # 获取聚合状态（如果启用）
+        aggregation_info = ""
+        if hasattr(self.message_processor, 'get_aggregation_status'):
+            agg_status = self.message_processor.get_aggregation_status()
+            aggregation_info = f"""
+📮 **消息聚合状态**
+- 聚合功能: ✅ 已启用
+- 当前聚合数: {agg_status['waiting_aggregations']}/{agg_status['total_aggregations']}
+- 最大等待时间: {agg_status['max_wait_time']}秒
+- 信心阈值: {agg_status['confidence_threshold']}
+"""
+        else:
+            aggregation_info = """
+📮 **消息聚合状态**
+- 聚合功能: ❌ 未启用
+"""
+
         status_info = f"""
 🔮 心流状态报告
 
@@ -471,7 +532,7 @@ class HeartflowPlugin(star.Star):
 - 总消息数: {chat_state.total_messages}
 - 总回复数: {chat_state.total_replies}
 - 回复率: {(chat_state.total_replies / max(1, chat_state.total_messages) * 100):.1f}%
-
+{aggregation_info}
 ⚙️ **配置参数**
 - 回复阈值: {self.reply_threshold}
 - 判断提供商: {self.judge_provider_name}
@@ -494,6 +555,36 @@ class HeartflowPlugin(star.Star):
 
         event.set_result(event.plain_result("✅ 心流状态已重置"))
         logger.info(f"心流状态已重置: {chat_id}")
+
+    # 管理员命令：清理聚合状态
+    @filter.command("heartflow_cleanup")
+    async def heartflow_cleanup(self, event: AstrMessageEvent):
+        """清理过期的消息聚合状态"""
+        
+        if hasattr(self.message_processor, 'cleanup_expired_aggregations'):
+            self.message_processor.cleanup_expired_aggregations()
+            event.set_result(event.plain_result("✅ 已清理过期的消息聚合状态"))
+            logger.info("已手动清理过期的消息聚合状态")
+        else:
+            event.set_result(event.plain_result("❌ 当前未启用消息聚合功能"))
+
+    # 管理员命令：切换聚合模式
+    @filter.command("heartflow_toggle_aggregation")
+    async def heartflow_toggle_aggregation(self, event: AstrMessageEvent):
+        """动态切换消息聚合模式"""
+        
+        current_enabled = self.config.get("enable_message_aggregation", False)
+        new_enabled = not current_enabled
+        
+        # 更新配置
+        self.config["enable_message_aggregation"] = new_enabled
+        
+        # 重新初始化消息处理器
+        self._init_message_processor()
+        
+        status = "启用" if new_enabled else "禁用"
+        event.set_result(event.plain_result(f"✅ 消息聚合功能已{status}"))
+        logger.info(f"消息聚合功能已{status}")
 
     async def _get_persona_system_prompt(self, event: AstrMessageEvent) -> str:
         """获取当前对话的人格系统提示词"""
