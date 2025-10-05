@@ -191,12 +191,18 @@ class HeartflowPlugin(star.Star):
 
         # 获取指定的 provider
         try:
+            logger.error(f"[ERRO] 开始获取判断提供商: {self.judge_provider_name}")
             judge_provider = self.context.get_provider_by_id(self.judge_provider_name)
             if not judge_provider:
-                logger.warning(f"未找到提供商: {self.judge_provider_name}")
+                logger.error(f"[ERRO] 未找到提供商: {self.judge_provider_name}")
+                logger.error(f"[ERRO] 可用提供商列表: {[p.name for p in self.context.provider_manager.providers]}")
                 return JudgeResult(should_reply=False, reasoning=f"提供商不存在: {self.judge_provider_name}")
+            logger.error(f"[ERRO] 成功获取判断提供商: {judge_provider}")
+            logger.error(f"[ERRO] 提供商类型: {type(judge_provider)}")
         except Exception as e:
-            logger.error(f"获取提供商失败: {e}")
+            logger.error(f"[ERRO] 获取提供商失败: {e}")
+            import traceback
+            logger.error(f"[ERRO] 获取提供商异常堆栈: {traceback.format_exc()}")
             return JudgeResult(should_reply=False, reasoning=f"获取提供商失败: {str(e)}")
 
         # 获取群聊状态
@@ -306,23 +312,67 @@ class HeartflowPlugin(star.Star):
             
             for attempt in range(max_retries):
                 try:
-                    logger.debug(f"小参数模型判断尝试 {attempt + 1}/{max_retries}")
-                    
+                    logger.error(f"[ERRO] 小参数模型判断尝试 {attempt + 1}/{max_retries}")
+                    logger.error(f"[ERRO] 使用提供商: {self.judge_provider_name}")
+                    logger.error(f"[ERRO] 发送提示词长度: {len(complete_judge_prompt)} 字符")
+                    logger.error(f"[ERRO] 传入上下文数量: {len(recent_contexts)} 条")
+
+                    # 打印发送的完整提示词（截断显示）
+                    logger.error(f"[ERRO] 发送的提示词前500字符: {complete_judge_prompt[:500]}...")
+
                     llm_response = await judge_provider.text_chat(
                         prompt=complete_judge_prompt,
                         contexts=recent_contexts  # 传入最近的对话历史
                     )
 
-                    content = llm_response.completion_text.strip()
-                    logger.debug(f"小参数模型原始返回内容: {content[:200]}...")
+                    # 详细检查响应对象
+                    logger.error(f"[ERRO] 收到响应对象: {type(llm_response)}")
+                    logger.error(f"[ERRO] 响应对象完整内容: {llm_response}")
+
+                    if hasattr(llm_response, '__dict__'):
+                        logger.error(f"[ERRO] 响应对象属性: {llm_response.__dict__}")
+
+                    # 检查completion_text属性
+                    if not hasattr(llm_response, 'completion_text'):
+                        logger.error(f"[ERRO] 响应对象缺少completion_text属性")
+                        logger.error(f"[ERRO] 响应对象可用属性: {dir(llm_response)}")
+                        if attempt == max_retries - 1:
+                            return JudgeResult(should_reply=False, reasoning="响应对象缺少completion_text属性")
+                        continue
+
+                    # 检查completion_text内容
+                    completion_text = llm_response.completion_text
+                    logger.error(f"[ERRO] completion_text类型: {type(completion_text)}")
+                    logger.error(f"[ERRO] completion_text值: {repr(completion_text)}")
+
+                    if completion_text is None:
+                        logger.error(f"[ERRO] completion_text为None")
+                        if attempt == max_retries - 1:
+                            return JudgeResult(should_reply=False, reasoning="completion_text为None")
+                        continue
+
+                    content = completion_text.strip()
+                    logger.error(f"[ERRO] 处理后的内容长度: {len(content)}")
+                    logger.error(f"[ERRO] 小参数模型原始返回内容: {repr(content)}")
+
+                    # 如果内容为空，详细记录
+                    if not content:
+                        logger.error(f"[ERRO] 内容为空字符串，原始completion_text: {repr(completion_text)}")
+                        if attempt == max_retries - 1:
+                            return JudgeResult(should_reply=False, reasoning="模型返回空字符串")
+                        continue
 
                     # 尝试提取JSON
+                    logger.error(f"[ERRO] 开始解析JSON，原始内容: {content}")
                     if content.startswith("```json"):
                         content = content.replace("```json", "").replace("```", "").strip()
+                        logger.error(f"[ERRO] 移除json标记后: {content}")
                     elif content.startswith("```"):
                         content = content.replace("```", "").strip()
+                        logger.error(f"[ERRO] 移除代码块标记后: {content}")
 
                     judge_data = json.loads(content)
+                    logger.error(f"[ERRO] JSON解析成功: {judge_data}")
 
                     # 直接从JSON根对象获取分数
                     relevance = judge_data.get("relevance", 0)
@@ -359,24 +409,41 @@ class HeartflowPlugin(star.Star):
                     )
                     
                 except json.JSONDecodeError as e:
-                    logger.warning(f"小参数模型返回JSON解析失败 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
-                    logger.warning(f"无法解析的内容: {content[:500]}...")
-                    
+                    logger.error(f"[ERRO] JSON解析失败 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                    logger.error(f"[ERRO] 解析失败的原始内容: {repr(content)}")
+                    logger.error(f"[ERRO] 解析失败的内容长度: {len(content)}")
+                    logger.error(f"[ERRO] 解析失败的前1000字符: {content[:1000]}")
+
                     if attempt == max_retries - 1:
                         # 最后一次尝试失败，返回失败结果
-                        logger.error(f"小参数模型重试{self.judge_max_retries}次后仍然返回无效JSON，放弃处理")
+                        logger.error(f"[ERRO] 小参数模型重试{self.judge_max_retries}次后仍然返回无效JSON，放弃处理")
+                        logger.error(f"[ERRO] 最终失败的内容完整打印: {repr(content)}")
                         return JudgeResult(should_reply=False, reasoning=f"JSON解析失败，重试{self.judge_max_retries}次")
                     else:
                         # 还有重试机会，添加更强的提示
+                        logger.error(f"[ERRO] 准备第{attempt + 2}次重试，修改提示词")
                         complete_judge_prompt = complete_judge_prompt.replace(
                             "**重要提醒：你必须严格按照JSON格式返回结果，不要包含任何其他内容！请不要进行对话，只返回JSON！**",
                             f"**重要提醒：你必须严格按照JSON格式返回结果，不要包含任何其他内容！请不要进行对话，只返回JSON！这是第{attempt + 2}次尝试，请确保返回有效的JSON格式！**"
                         )
                         continue
 
+                except Exception as inner_e:
+                    logger.error(f"[ERRO] 处理过程中发生异常 (尝试 {attempt + 1}/{max_retries}): {str(inner_e)}")
+                    logger.error(f"[ERRO] 异常类型: {type(inner_e)}")
+                    import traceback
+                    logger.error(f"[ERRO] 异常堆栈: {traceback.format_exc()}")
+
+                    if attempt == max_retries - 1:
+                        return JudgeResult(should_reply=False, reasoning=f"处理异常: {str(inner_e)}")
+                    continue
+
         except Exception as e:
-            logger.error(f"小参数模型判断异常: {e}")
-            return JudgeResult(should_reply=False, reasoning=f"异常: {str(e)}")
+            logger.error(f"[ERRO] 小参数模型判断顶层异常: {e}")
+            logger.error(f"[ERRO] 顶层异常类型: {type(e)}")
+            import traceback
+            logger.error(f"[ERRO] 顶层异常堆栈: {traceback.format_exc()}")
+            return JudgeResult(should_reply=False, reasoning=f"顶层异常: {str(e)}")
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=1000)
     async def on_group_message(self, event: AstrMessageEvent):
