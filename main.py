@@ -219,89 +219,63 @@ class HeartflowPlugin(star.Star):
         # 构建判断上下文
         chat_context = await self._build_chat_context(event)
         recent_messages = await self._get_recent_messages(event)
-        last_bot_reply = await self._get_last_bot_reply(event)  # 新增：获取上次bot回复
+        last_bot_reply = await self._get_last_bot_reply(event)
 
         reasoning_part = ""
         if self.judge_include_reasoning:
-            reasoning_part = ',\n    "reasoning": "详细分析原因，说明为什么应该或不应该回复，需要结合机器人角色特点进行分析，特别说明与上次回复的关联性"'
+            reasoning_part = ',\n    "reasoning": "简短分析理由"'
 
-        judge_prompt = f"""
-你是群聊机器人的决策系统，需要判断是否应该主动回复以下消息。
+        judge_prompt = f"""你是群聊机器人的决策系统，判断是否主动回复消息。
 
-## 机器人角色设定
-{persona_system_prompt if persona_system_prompt else "默认角色：智能助手"}
+机器人角色: {persona_system_prompt if persona_system_prompt else "智能助手"}
 
-## 当前群聊情况
-- 群聊ID: {event.unified_msg_origin}
-- 我的精力水平: {chat_state.energy:.1f}/1.0
+状态信息:
+- 精力水平: {chat_state.energy:.1f}/1.0
 - 上次发言: {self._get_minutes_since_last_reply(event.unified_msg_origin)}分钟前
+- {chat_context}
 
-## 群聊基本信息
-{chat_context}
+最近对话:
+{recent_messages[:500] if recent_messages else "无历史"}
 
-## 最近{self.context_messages_count}条对话历史
-{recent_messages}
+上次回复:
+{last_bot_reply[:200] if last_bot_reply else "无"}
 
-## 上次机器人回复
-{last_bot_reply if last_bot_reply else "暂无上次回复记录"}
-
-## 待判断消息
+当前消息:
 发送者: {event.get_sender_name()}
 内容: {event.message_str}
-时间: {datetime.datetime.now().strftime('%H:%M:%S')}
+时间: {datetime.datetime.now().strftime('%H:%M')}
 
-## 评估要求
-请从以下5个维度评估（0-10分），**重要提醒：基于上述机器人角色设定来判断是否适合回复**：
+评估维度(0-10分):
+1. 相关度: 消息价值和话题性
+2. 意愿: 基于当前精力和角色特点
+3. 社交: 群聊氛围适宜性
+4. 时机: 回复时机恰当性
+5. 连贯: 与上次回复关联度
 
-1. **内容相关度**(0-10)：消息是否有趣、有价值、适合我回复
-   - 考虑消息的质量、话题性、是否需要回应
-   - 识别并过滤垃圾消息、无意义内容
-   - **结合机器人角色特点，判断是否符合角色定位**
+回复阈值: {self.reply_threshold}
 
-2. **回复意愿**(0-10)：基于当前状态，我回复此消息的意愿
-   - 考虑当前精力水平和心情状态
-   - 考虑今日回复频率控制
-   - **基于机器人角色设定，判断是否应该主动参与此话题**
+权重配置:
+- 相关度权重: {self.weights['relevance']:.0%}
+- 意愿权重: {self.weights['willingness']:.0%}
+- 社交权重: {self.weights['social']:.0%}
+- 时机权重: {self.weights['timing']:.0%}
+- 连贯权重: {self.weights['continuity']:.0%}
 
-3. **社交适宜性**(0-10)：在当前群聊氛围下回复是否合适
-   - 考虑群聊活跃度和讨论氛围
-   - **考虑机器人角色在群中的定位和表现方式**
-
-4. **时机恰当性**(0-10)：回复时机是否恰当
-   - 考虑距离上次回复的时间间隔
-   - 考虑消息的紧急性和时效性
-
-5. **对话连贯性**(0-10)：当前消息与上次机器人回复的关联程度
-   - 如果当前消息是对上次回复的回应或延续，应给高分
-   - 如果当前消息与上次回复完全无关，给中等分数
-   - 如果没有上次回复记录，给默认分数5分
-
-**回复阈值**: {self.reply_threshold} (综合评分达到此分数才回复)
-
-**重要！！！请严格按照以下JSON格式回复，不要添加任何其他内容：**
-
-请以JSON格式回复：
+返回JSON格式:
 {{
     "relevance": 分数,
     "willingness": 分数,
     "social": 分数,
     "timing": 分数,
     "continuity": 分数{reasoning_part}
-}}
-
-**注意：你的回复必须是完整的JSON对象，不要包含任何解释性文字或其他内容！**
-"""
+}}"""
 
         try:
-            # 使用 provider 调用模型，传入最近的对话历史作为上下文
+            # 获取最近的对话上下文用于判断
             recent_contexts = await self._get_recent_contexts(event)
 
-            # 构建完整的判断提示词，将系统提示直接整合到prompt中
-            complete_judge_prompt = "你是一个专业的群聊回复决策系统，能够准确判断消息价值和回复时机。"
-            if persona_system_prompt:
-                complete_judge_prompt += f"\n\n你正在为以下角色的机器人做决策：\n{persona_system_prompt}"
-            complete_judge_prompt += "\n\n**重要提醒：你必须严格按照JSON格式返回结果，不要包含任何其他内容！请不要进行对话，只返回JSON！**\n\n"
-            complete_judge_prompt += judge_prompt
+            # 构建完整的判断提示词，简化系统提示
+            complete_judge_prompt = "你是群聊回复决策系统。严格按JSON格式返回，不要其他内容！\n\n" + judge_prompt
 
             # 重试机制：使用配置的重试次数
             max_retries = self.judge_max_retries + 1  # 配置的次数+原始尝试=总尝试次数
