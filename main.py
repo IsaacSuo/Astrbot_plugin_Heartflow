@@ -307,49 +307,58 @@ class HeartflowPlugin(star.Star):
                     api_duration = time.time() - api_start_time
                     logger.error(f"[ERRO] API调用完成，耗时: {api_duration:.2f}秒")
 
-                    # 详细检查响应对象
-                    logger.error(f"[ERRO] 收到响应对象: {type(llm_response)}")
-                    logger.error(f"[ERRO] 响应对象完整内容: {llm_response}")
+                    # 完整打印响应对象
+                    logger.error(f"[ERRO] ========== 完整响应对象分析 ==========")
+                    logger.error(f"[ERRO] 响应对象类型: {type(llm_response)}")
+                    logger.error(f"[ERRO] 响应对象ID: {id(llm_response)}")
+                    logger.error(f"[ERRO] 响应对象模块: {type(llm_response).__module__}")
 
-                    if hasattr(llm_response, '__dict__'):
-                        logger.error(f"[ERRO] 响应对象属性: {llm_response.__dict__}")
+                    # 打印所有属性和方法
+                    logger.error(f"[ERRO] 响应对象所有属性和方法: {dir(llm_response)}")
 
-                    # 检查是否有其他可能的响应属性
-                    logger.error(f"[ERRO] 响应对象所有属性: {dir(llm_response)}")
-
-                    # 尝试检查常见的响应属性
-                    for attr in ['text', 'content', 'message', 'response', 'result', 'output']:
-                        if hasattr(llm_response, attr):
-                            value = getattr(llm_response, attr)
-                            logger.error(f"[ERRO] 找到属性 {attr}: {type(value)} = {repr(value)}")
-
-                    # 如果响应对象有特殊的字符串表示，也打印出来
-                    logger.error(f"[ERRO] 响应对象字符串表示: {str(llm_response)}")
-                    logger.error(f"[ERRO] 响应对象repr表示: {repr(llm_response)}")
-
-                    # 深度检查响应对象的结构（针对Gemini可能的嵌套结构）
-                    def deep_inspect_object(obj, prefix="", max_depth=3):
-                        if max_depth <= 0:
-                            return
-
-                        if hasattr(obj, '__dict__'):
-                            for key, value in obj.__dict__.items():
-                                logger.error(f"[ERRO] {prefix}{key}: {type(value)} = {repr(value)}")
-                                if hasattr(value, '__dict__') and max_depth > 1:
-                                    deep_inspect_object(value, f"{prefix}{key}.", max_depth-1)
-                        elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
+                    # 逐个打印所有属性的值
+                    logger.error(f"[ERRO] ========== 属性详细值 ==========")
+                    for attr_name in dir(llm_response):
+                        if not attr_name.startswith('_'):  # 跳过私有属性
                             try:
-                                for i, item in enumerate(obj):
-                                    if i > 5:  # 限制数组检查数量
-                                        break
-                                    logger.error(f"[ERRO] {prefix}[{i}]: {type(item)} = {repr(item)}")
-                                    if hasattr(item, '__dict__') and max_depth > 1:
-                                        deep_inspect_object(item, f"{prefix}[{i}].", max_depth-1)
-                            except:
-                                pass
+                                attr_value = getattr(llm_response, attr_name)
+                                logger.error(f"[ERRO] {attr_name}: {type(attr_value)} = {repr(attr_value)}")
 
-                    logger.error(f"[ERRO] 开始深度检查响应对象结构...")
-                    deep_inspect_object(llm_response, "response.")
+                                # 如果是字典或对象，进一步展开
+                                if hasattr(attr_value, '__dict__'):
+                                    logger.error(f"[ERRO]   └─ {attr_name}.__dict__: {attr_value.__dict__}")
+                                elif isinstance(attr_value, (list, tuple)) and len(attr_value) > 0:
+                                    logger.error(f"[ERRO]   └─ {attr_name}长度: {len(attr_value)}")
+                                    for i, item in enumerate(attr_value[:3]):  # 只打印前3个
+                                        logger.error(f"[ERRO]     [{i}]: {type(item)} = {repr(item)}")
+                                        if hasattr(item, '__dict__'):
+                                            logger.error(f"[ERRO]       └─ __dict__: {item.__dict__}")
+                            except Exception as e:
+                                logger.error(f"[ERRO] {attr_name}: 无法访问 - {e}")
+
+                    # 如果有__dict__，完整打印
+                    if hasattr(llm_response, '__dict__'):
+                        logger.error(f"[ERRO] ========== __dict__完整内容 ==========")
+                        logger.error(f"[ERRO] {llm_response.__dict__}")
+
+                    # 字符串表示
+                    logger.error(f"[ERRO] ========== 字符串表示 ==========")
+                    logger.error(f"[ERRO] str(): {str(llm_response)}")
+                    logger.error(f"[ERRO] repr(): {repr(llm_response)}")
+
+                    # 尝试访问可能的原始响应数据
+                    logger.error(f"[ERRO] ========== 查找原始API响应 ==========")
+                    for possible_attr in ['raw_response', '_response', 'response', 'data', '_data', 'candidates', '_candidates']:
+                        if hasattr(llm_response, possible_attr):
+                            try:
+                                raw_data = getattr(llm_response, possible_attr)
+                                logger.error(f"[ERRO] 找到{possible_attr}: {type(raw_data)} = {repr(raw_data)}")
+                                if hasattr(raw_data, '__dict__'):
+                                    logger.error(f"[ERRO]   └─ {possible_attr}.__dict__: {raw_data.__dict__}")
+                            except Exception as e:
+                                logger.error(f"[ERRO] 访问{possible_attr}失败: {e}")
+
+                    logger.error(f"[ERRO] ========== 响应对象分析完成 ==========")
 
                     # 检查completion_text属性
                     if not hasattr(llm_response, 'completion_text'):
