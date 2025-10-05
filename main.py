@@ -320,10 +320,18 @@ class HeartflowPlugin(star.Star):
                     # 打印发送的完整提示词（截断显示）
                     logger.error(f"[ERRO] 发送的提示词前500字符: {complete_judge_prompt[:500]}...")
 
+                    # 记录API调用时间
+                    import time
+                    api_start_time = time.time()
+                    logger.error(f"[ERRO] 开始调用API: {time.strftime('%H:%M:%S', time.localtime())}")
+
                     llm_response = await judge_provider.text_chat(
                         prompt=complete_judge_prompt,
                         contexts=recent_contexts  # 传入最近的对话历史
                     )
+
+                    api_duration = time.time() - api_start_time
+                    logger.error(f"[ERRO] API调用完成，耗时: {api_duration:.2f}秒")
 
                     # 详细检查响应对象
                     logger.error(f"[ERRO] 收到响应对象: {type(llm_response)}")
@@ -331,6 +339,43 @@ class HeartflowPlugin(star.Star):
 
                     if hasattr(llm_response, '__dict__'):
                         logger.error(f"[ERRO] 响应对象属性: {llm_response.__dict__}")
+
+                    # 检查是否有其他可能的响应属性
+                    logger.error(f"[ERRO] 响应对象所有属性: {dir(llm_response)}")
+
+                    # 尝试检查常见的响应属性
+                    for attr in ['text', 'content', 'message', 'response', 'result', 'output']:
+                        if hasattr(llm_response, attr):
+                            value = getattr(llm_response, attr)
+                            logger.error(f"[ERRO] 找到属性 {attr}: {type(value)} = {repr(value)}")
+
+                    # 如果响应对象有特殊的字符串表示，也打印出来
+                    logger.error(f"[ERRO] 响应对象字符串表示: {str(llm_response)}")
+                    logger.error(f"[ERRO] 响应对象repr表示: {repr(llm_response)}")
+
+                    # 深度检查响应对象的结构（针对Gemini可能的嵌套结构）
+                    def deep_inspect_object(obj, prefix="", max_depth=3):
+                        if max_depth <= 0:
+                            return
+
+                        if hasattr(obj, '__dict__'):
+                            for key, value in obj.__dict__.items():
+                                logger.error(f"[ERRO] {prefix}{key}: {type(value)} = {repr(value)}")
+                                if hasattr(value, '__dict__') and max_depth > 1:
+                                    deep_inspect_object(value, f"{prefix}{key}.", max_depth-1)
+                        elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
+                            try:
+                                for i, item in enumerate(obj):
+                                    if i > 5:  # 限制数组检查数量
+                                        break
+                                    logger.error(f"[ERRO] {prefix}[{i}]: {type(item)} = {repr(item)}")
+                                    if hasattr(item, '__dict__') and max_depth > 1:
+                                        deep_inspect_object(item, f"{prefix}[{i}].", max_depth-1)
+                            except:
+                                pass
+
+                    logger.error(f"[ERRO] 开始深度检查响应对象结构...")
+                    deep_inspect_object(llm_response, "response.")
 
                     # 检查completion_text属性
                     if not hasattr(llm_response, 'completion_text'):
